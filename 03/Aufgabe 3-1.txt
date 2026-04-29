@@ -1,0 +1,34 @@
+Question 1:
+
+p0
+|
+| __ p1
+|        |
+|	 | __ p2
+|	 |
+|	 | __ p5
+|
+| __ p3
+|
+| __ p4
+
+
+Question 2:
+
+p1/the first child is the only process that runs waitpid.
+
+
+Question 3:
+
+p0: 16
+p1: 12
+p2: 30
+p3: 45
+p4: 16
+p5: 12
+
+
+Question 4:
+
+Yes, there is a zombie that will appear. p3 becomes a zombie and remains one for 3 seconds. This is the difference between the child dying at 2 seconds and the parent finally terminating at 5 seconds.
+

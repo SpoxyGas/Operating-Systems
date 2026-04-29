@@ -1,0 +1,17 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Make Build",
+            "type": "shell",
+            "command": "make",
+            "args": [],
+            "problemMatcher": ["$gcc"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Runs the Makefile in the current directory"
+        }
+    ]
+}
