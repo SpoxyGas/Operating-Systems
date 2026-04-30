@@ -31,7 +31,7 @@ WFLAGS = -Wall -Wextra -Wpedantic -g
 # -O0:			        Do not optimize the program
 # $(WFLAGS)             Warning flags
 parallel_grep: FORCE
-	$(CC) $(SOURCE) $(INCLUDEDIRS:%=-I%) -o $@.out -std=c11 -O0 $(WFLAGS)
+	$(CC) $(SOURCE) $(INCLUDEDIRS:%=-I%) -o $@.out -std=c11 -O0 $(WFLAGS) -pthread
 
 # Compile with address sanitizer enabled
 # $(SOURCE): 			Input file(s)
