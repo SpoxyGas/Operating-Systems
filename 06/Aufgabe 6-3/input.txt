@@ -1,0 +1,10 @@
+this is line zero and it should be fully uppercase.
+multithreading in c is both powerful and dangerous.
+deferred cancellation is the safe way to stop a thread.
+it waits until a safe cancellation point is reached.
+asynchronous cancellation is the dangerous way.
+it acts like a sniper and kills the thread instantly.
+if you are reading this in async mode, the thread survived too long!
+you should probably increase the usleep time in main.
+this line is just padding to give the cpu more work to do.
+this is the final line of the input file.
