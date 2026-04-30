@@ -95,14 +95,14 @@ int main (int argc, char *argv[]){
     const char* keyword = argv[2];
     int num_files = argc - 3;
     int results_array[num_files];
-    for(size_t i = 0; i < num_files; i++){
+    for(int i = 0; i < num_files; i++){
         results_array[i] = 0;
     }
 
     threadpool_t* pool = threadpool_t_init(num_threads);
     hidden_checkpoint("POOL_CREATED");
 
-    for(size_t i = 0; i < num_files; i++){
+    for(int i = 0; i < num_files; i++){
         struct task_info* task = malloc(sizeof(struct task_info));
         if (task == NULL) { // Always good practice to check malloc
             fprintf(stderr, "Memory allocation failed\n");
@@ -127,7 +127,7 @@ int main (int argc, char *argv[]){
     int total_matches = 0;
 
     struct file_result sorted[num_files];
-    for(size_t i = 0; i < num_files; i++){
+    for(int i = 0; i < num_files; i++){
         sorted[i].filename = argv[i + 3];
         sorted[i].matches = results_array[i];
 
