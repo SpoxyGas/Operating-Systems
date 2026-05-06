@@ -78,7 +78,7 @@ int comparator(const void* a, const void* b){
 }
 
 
-int main (int argc, char *argv[]){
+int main (int argc, char* argv[]){
     hidden_checkpoint("MAIN_START");
 
     if(argc < 4){
