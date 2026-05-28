@@ -27,11 +27,23 @@ int processed_events = 0;
 int monster_hp = INITIAL_MONSTER_HP;
 int fortress_hp = INITIAL_FORTRESS_HP;
 
+int mana = INITIAL_MANA;
+int potions = INITIAL_POTIONS;
+int traps_available = INITIAL_TRAPS;
+int arrows_available = INITIAL_ARROWS;
+
+/* =========================================================
+   Synchronization Objects
+   ========================================================= */
+
 sem_t empty_slots;
 sem_t full_slots;
 
 pthread_mutex_t queue_mutex;
-pthread_mutex_t state_mutex;
+pthread_mutex_t monster_mutex;
+pthread_mutex_t fortress_mutex;
+pthread_mutex_t inventory_mutex;
+pthread_mutex_t stats_mutex;
 
 /* =========================================================
    Error Handling
@@ -97,6 +109,8 @@ const char *event_name(EventType type) {
             return "HEAL";
         case EVENT_MONSTER_ATTACK:
             return "MONSTER_ATTACK";
+        case EVENT_SHIELD_BASH:
+            return "SHIELD_BASH";
         default:
             return "UNKNOWN";
     }
@@ -125,6 +139,11 @@ int parse_event_type(const char *text, EventType *type) {
 
     if (strcmp(text, "MONSTER_ATTACK") == 0) {
         *type = EVENT_MONSTER_ATTACK;
+        return 1;
+    }
+
+    if (strcmp(text, "SHIELD_BASH") == 0) {
+        *type = EVENT_SHIELD_BASH;
         return 1;
     }
 
@@ -286,18 +305,42 @@ void print_event_processed(
                    worker_id,
                    current_fortress_hp);
             break;
+
+        case EVENT_SHIELD_BASH:
+            printf("Worker %ld processed SHIELD_BASH from Hero %d. Monster HP = %d, Fortress HP = %d\n",
+                   worker_id,
+                   event.source_id,
+                   current_monster_hp,
+                   current_fortress_hp);
+            break;
     }
 }
 
 void print_final_result(
     int total_processed,
     int final_monster_hp,
-    int final_fortress_hp
+    int final_fortress_hp,
+    int final_mana,
+    int final_potions,
+    int final_traps,
+    int final_arrows
 ) {
     printf("\nFinal result:\n");
     printf("Processed events: %d\n", total_processed);
     printf("Monster HP: %d\n", final_monster_hp);
     printf("Fortress HP: %d\n", final_fortress_hp);
+    printf("Mana: %d\n", final_mana);
+    printf("Potions: %d\n", final_potions);
+    printf("Traps available: %d\n", final_traps);
+    printf("Arrows available: %d\n", final_arrows);
+}
+
+/* =========================================================
+   STOP Helpers
+   ========================================================= */
+
+int is_stop_event(CombatEvent event) {
+    return event.source_id == -1 && event.type == EVENT_HEAL;
 }
 
 /* =========================================================
@@ -307,54 +350,46 @@ void print_final_result(
 void enqueue_event(CombatEvent event) {
     int err;
 
-    if (sem_wait(&empty_slots) < 0) {
+    if (sem_wait(&empty_slots) == -1)
         check_system_error("sem_wait(empty_slots)");
-    }
 
     err = pthread_mutex_lock(&queue_mutex);
-    if (err != 0) {
-        check_pthread_error(err, "pthread_mutex_lock(queue_mutex)");
-    }
-    
-    queue[in] = event;
-    print_event_queued(event, in);
-    in = (in + 1) % queue_size;
-    
-    err = pthread_mutex_unlock(&queue_mutex);
-    if (err != 0) {
-        check_pthread_error(err, "pthread_mutex_unlock(queue_mutex)");
-    }
+    check_pthread_error(err, "pthread_mutex_lock(queue_mutex)");
 
-    if (sem_post(&full_slots) < 0) {
+    queue[in] = event;
+
+    print_event_queued(event, in);
+
+    in = (in + 1) % queue_size;
+
+    err = pthread_mutex_unlock(&queue_mutex);
+    check_pthread_error(err, "pthread_mutex_unlock(queue_mutex)");
+
+    if (sem_post(&full_slots) == -1)
         check_system_error("sem_post(full_slots)");
-    }
 }
 
 CombatEvent dequeue_event(void) {
-    CombatEvent event = {0};
+    CombatEvent event;
     int err;
 
-    if(sem_wait(&full_slots) < 0) {
+    if (sem_wait(&full_slots) == -1)
         check_system_error("sem_wait(full_slots)");
-    }
 
     err = pthread_mutex_lock(&queue_mutex);
-    if (err != 0) {
-        check_pthread_error(err, "pthread_mutex_lock(queue_mutex)");
-    }
+    check_pthread_error(err, "pthread_mutex_lock(queue_mutex)");
 
     event = queue[out];
-    print_event_dequeued(event, out);
-    out = (out + 1) % queue_size;
-    
-    err = pthread_mutex_unlock(&queue_mutex);
-    if (err != 0) {
-        check_pthread_error(err, "pthread_mutex_unlock(queue_mutex)");
-    }
 
-    if (sem_post(&empty_slots) < 0) {
+    print_event_dequeued(event, out);
+
+    out = (out + 1) % queue_size;
+
+    err = pthread_mutex_unlock(&queue_mutex);
+    check_pthread_error(err, "pthread_mutex_unlock(queue_mutex)");
+
+    if (sem_post(&empty_slots) == -1)
         check_system_error("sem_post(empty_slots)");
-    }
 
     return event;
 }
@@ -365,29 +400,132 @@ CombatEvent dequeue_event(void) {
 
 void process_event(CombatEvent event, long worker_id) {
     int err;
-    
-    err = pthread_mutex_lock(&state_mutex);
-    if (err != 0){
-        check_pthread_error(err,"pthread_mutex_lock(state_mutex)");
+    int local_monsterHP = monster_hp;
+    int local_fortressHP = fortress_hp;
+
+    switch (event.type){
+        case EVENT_ARROW:
+            err = pthread_mutex_lock(&inventory_mutex);
+            check_pthread_error(err, "pthread_mutex_lock(inventory_mutex)");
+
+            err = pthread_mutex_lock(&monster_mutex);
+            check_pthread_error(err, "pthread_mutex_lock(monster_mutex)");
+
+            if (arrows_available >= ARROW_ITEM_COST) {
+                arrows_available -= ARROW_ITEM_COST;
+                monster_hp -= event.power;
+            }
+            local_monsterHP = monster_hp;
+
+            err = pthread_mutex_unlock(&monster_mutex); 
+            check_pthread_error(err, "pthread_mutex_unlock(monster_mutex)");
+
+            err = pthread_mutex_unlock(&inventory_mutex); 
+            check_pthread_error(err, "pthread_mutex_unlock(inventory_mutex)");
+            break;
+        
+        case EVENT_FIREBALL:
+            err = pthread_mutex_lock(&inventory_mutex);
+            check_pthread_error(err, "pthread_mutex_lock(inventory_mutex)");
+
+            err = pthread_mutex_lock(&monster_mutex);
+            check_pthread_error(err, "pthread_mutex_lock(monster_mutex)");
+
+            if(mana >= FIREBALL_MANA_COST){
+                mana -= FIREBALL_MANA_COST;
+                monster_hp -= event.power;
+            }
+            local_monsterHP = monster_hp;
+
+            err = pthread_mutex_unlock(&monster_mutex); 
+            check_pthread_error(err, "pthread_mutex_unlock(monster_mutex)");
+
+            err = pthread_mutex_unlock(&inventory_mutex); 
+            check_pthread_error(err, "pthread_mutex_unlock(inventory_mutex)");
+            break;
+        
+        case EVENT_TRAP:
+            err = pthread_mutex_lock(&inventory_mutex); 
+            check_pthread_error(err, "pthread_mutex_lock(inventory_mutex)");
+
+            err = pthread_mutex_lock(&monster_mutex); 
+            check_pthread_error(err, "pthread_mutex_lock(monster_mutex)");
+            
+            if (traps_available >= TRAP_ITEM_COST) {
+                traps_available -= TRAP_ITEM_COST;
+                monster_hp -= event.power;
+            }
+            local_monsterHP = monster_hp;
+            
+            err = pthread_mutex_unlock(&monster_mutex); 
+            check_pthread_error(err, "pthread_mutex_unlock(monster_mutex)");
+
+            err = pthread_mutex_unlock(&inventory_mutex); 
+            check_pthread_error(err, "pthread_mutex_unlock(inventory_mutex)");
+            break;
+
+        case EVENT_HEAL:
+
+            err = pthread_mutex_lock(&inventory_mutex);
+            check_pthread_error(err, "pthread_mutex_lock(inventory_mutex)");
+
+            err = pthread_mutex_lock(&fortress_mutex);
+            check_pthread_error(err, "pthread_mutex_lock(fortress_mutex)");
+            
+            if (mana >= HEAL_MANA_COST && potions >= HEAL_POTION_COST) {
+                mana -= HEAL_MANA_COST;
+                potions -= HEAL_POTION_COST;
+                fortress_hp += event.power;
+            }
+            local_fortressHP = fortress_hp;
+            
+            err = pthread_mutex_unlock(&fortress_mutex);
+            check_pthread_error(err, "pthread_mutex_unlock(fortress_mutex)");
+
+            err = pthread_mutex_unlock(&inventory_mutex); 
+            check_pthread_error(err, "pthread_mutex_unlock(inventory_mutex)");
+            break;
+
+        case EVENT_MONSTER_ATTACK:
+            err = pthread_mutex_lock(&fortress_mutex);
+            check_pthread_error(err, "pthread_mutex_lock(fortress_mutex)");
+            
+            fortress_hp -= event.power;
+            local_fortressHP = fortress_hp;
+            
+            err = pthread_mutex_unlock(&fortress_mutex); 
+            check_pthread_error(err, "pthread_mutex_unlock(fortress_mutex)");
+            break;
+        
+        case EVENT_SHIELD_BASH:
+            err = pthread_mutex_lock(&monster_mutex);
+            check_pthread_error(err, "pthread_mutex_lock(monster_mutex)");
+
+            err = pthread_mutex_lock(&fortress_mutex); 
+            check_pthread_error(err, "pthread_mutex_lock(fortress_mutex)");
+            
+            monster_hp -= event.power;
+            fortress_hp -= (event.power / 2);
+            local_monsterHP = monster_hp;
+            local_fortressHP = fortress_hp;
+            
+            err = pthread_mutex_unlock(&fortress_mutex);
+            check_pthread_error(err, "pthread_mutex_unlock(fortress_mutex)");
+
+            err = pthread_mutex_unlock(&monster_mutex);
+            check_pthread_error(err, "pthread_mutex_unlock(monster_mutex)");
+            break;
     }
 
-    if(event.source_id == 0){
-        fortress_hp -= event.power;
-    } else {
-        if(event.type == EVENT_HEAL){
-            fortress_hp += event.power;
-        } else {
-            monster_hp -= event.power;
-        }
-    }
+    err = pthread_mutex_lock(&stats_mutex); 
+    check_pthread_error(err, "pthread_mutex_lock(stats_mutex)");
 
     processed_events++;
-    print_event_processed(event, worker_id, monster_hp, fortress_hp);
 
-    err = pthread_mutex_unlock(&state_mutex);
-    if (err != 0) {
-        check_pthread_error(err, "pthread_mutex_unlock(state_mutex)");
-    }
+    err = pthread_mutex_unlock(&stats_mutex); 
+    check_pthread_error(err, "pthread_mutex_unlock(stats_mutex)");
+
+    print_event_processed(event, worker_id, local_monsterHP, local_fortressHP);
 }
 
 /* =========================================================
@@ -422,6 +560,7 @@ void *monster_thread(void *arg) {
     return NULL;
 }
 
+
 /* =========================================================
    Worker Thread
    ========================================================= */
@@ -431,7 +570,7 @@ void *worker_thread(void *arg) {
     
     while(1){
         CombatEvent event = dequeue_event();
-        if(event.source_id == -1){
+        if(is_stop_event(event)){
             break;
         } else {
             process_event(event, worker_id);
@@ -473,8 +612,7 @@ int main(int argc, char *argv[]) {
     if (heroes == NULL || workers == NULL){
         check_system_error("malloc(threads)");
     }
-
-
+    
     //initialize synchronization objects
     if(sem_init(&empty_slots, 0, queue_size) != 0){
         check_system_error("sem_init(empty_slots)");
@@ -488,11 +626,22 @@ int main(int argc, char *argv[]) {
     if (err != 0) {
         check_pthread_error(err, "pthread_mutex_init(queue_mutex)");
     }
-    err = pthread_mutex_init(&state_mutex, NULL);
+    err = pthread_mutex_init(&monster_mutex, NULL);
     if (err != 0) {
-        check_pthread_error(err, "pthread_mutex_init(state_mutex)");
+        check_pthread_error(err, "pthread_mutex_init(monster_mutex)");
     }
-
+    err = pthread_mutex_init(&fortress_mutex, NULL);
+    if (err != 0) {
+        check_pthread_error(err, "pthread_mutex_init(fortress_mutex)");
+    }
+    err = pthread_mutex_init(&inventory_mutex, NULL);
+    if (err != 0) {
+        check_pthread_error(err, "pthread_mutex_init(inventory_mutex)");
+    }
+    err = pthread_mutex_init(&stats_mutex, NULL);
+    if (err != 0) {
+        check_pthread_error(err, "pthread_mutex_init(stats_mutex)");
+    }
 
     //create hero, monster, and worker threads
     for (int i = 0; i < hero_count; i++){
@@ -530,12 +679,8 @@ int main(int argc, char *argv[]) {
 
     //insert STOP events
     for(int i = 0; i < worker_count; i++){ 
-    CombatEvent stop;
-    stop.source_id = -1;
-    stop.type = EVENT_HEAL;
-    stop.power = 1;
-    stop.delay_ms = 1;
-    enqueue_event(stop);
+        CombatEvent stop = {-1, EVENT_HEAL, 1, 0};
+        enqueue_event(stop);
     }
 
     for(int i = 0; i < worker_count; i++){
@@ -544,27 +689,22 @@ int main(int argc, char *argv[]) {
             check_pthread_error(err, "pthread_join(worker)");
         }
     }
-    
 
-    /*
-       TODO
-       TODO
-       TODO
-       TODO
-       TODO
-       TODO
-    */
-
-
-
-    print_final_result(processed_events, monster_hp, fortress_hp);
+    print_final_result(
+        processed_events,
+        monster_hp,
+        fortress_hp,
+        mana,
+        potions,
+        traps_available,
+        arrows_available
+    );
 
     free(queue);
     free(heroes);
     free(workers);
 
-
-    //destroy synchronization objects
+    //destroy synchronisation objects
     if(sem_destroy(&empty_slots) != 0){
         check_system_error("sem_destroy(empty_slots)");
     }
@@ -576,10 +716,22 @@ int main(int argc, char *argv[]) {
     if (err != 0) {
         check_pthread_error(err, "pthread_mutex_destroy(queue_mutex)");
     }
-    err = pthread_mutex_destroy(&state_mutex);
+    err = pthread_mutex_destroy(&monster_mutex);
     if (err != 0) {
-        check_pthread_error(err, "pthread_mutex_destroy(state_mutex)");
+        check_pthread_error(err, "pthread_mutex_destroy(monster_mutex)");
     }
-    
+    err = pthread_mutex_destroy(&fortress_mutex);
+    if (err != 0) {
+        check_pthread_error(err, "pthread_mutex_destroy(fortress_mutex)");
+    }
+    err = pthread_mutex_destroy(&inventory_mutex);
+    if (err != 0) {
+        check_pthread_error(err, "pthread_mutex_destroy(inventory_mutex)");
+    }
+    err = pthread_mutex_destroy(&stats_mutex);
+    if (err != 0) {
+        check_pthread_error(err, "pthread_mutex_destroy(stats_mutex)");
+    }
+
     return 0;
 }
