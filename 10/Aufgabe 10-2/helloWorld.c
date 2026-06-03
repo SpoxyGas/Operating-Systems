@@ -93,8 +93,6 @@ void* worker_function(void* arg){
             }
             break;
     }
-
-
     return NULL;
 }
 
