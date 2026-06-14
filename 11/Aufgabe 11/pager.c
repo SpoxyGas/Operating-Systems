@@ -82,43 +82,88 @@ static int find_lowest_free_frame(void) {
 /* ---------- TODO functions for students ---------- */
 
 static void request_memory(const char *pid, int size) {
-    /*
-     * TODO:
-     * 1. Check whether process already exists.
-     * 2. Compute number of pages.
-     * 3. Check whether enough free frames exist.
-     * 4. Create process entry.
-     * 5. Allocate page table.
-     * 6. Assign lowest available frames.
-     * 7. Print required success/error message.
-     */
+    if (find_process(pid) != NULL) {
+        printf("Error: process already exists\n");
+        return;
+    }
+
+    int pages = ceil_div(size, page_size);
+
+    if (pages > count_free_frames()) {
+        printf("Error: insufficient memory\n");
+        return;
+    }
+
+    Process *p = find_free_process_slot();
+    if (p == NULL) {
+        printf("Error: insufficient memory\n");
+        return;
+    }
+
+    p->active = true;
+    strcpy(p->pid, pid);
+    p->size = size;
+    p->pages = pages;
+    p->fragmentation = (pages * page_size) - size;
+    p->created_order = creation_counter++;
+
+    if (pages > 0) {
+        p->page_table = calloc((size_t)pages, sizeof(PageTableEntry));
+    } else {
+        p->page_table = NULL;
+    }
+
+    for (int i = 0; i < pages; i++) {
+        int frame = find_lowest_free_frame();
+        frame_used[frame] = true;
+        p->page_table[i].frame = frame;
+    }
+
+    printf("Allocated %d pages to process %s\n", pages, pid);
 }
 
 static void release_memory(const char *pid) {
-    /*
-     * TODO:
-     * 1. Find process.
-     * 2. If not found, print required error.
-     * 3. Free all frames used by this process.
-     * 4. Free page table.
-     * 5. Mark process inactive.
-     * 6. Print required success message.
-     */
+    Process *p = find_process(pid);
+
+    if (p == NULL) {
+        printf("Error: process not found\n");
+        return;
+    }
+
+    for (int i = 0; i < p->pages; i++) {
+        frame_used[p->page_table[i].frame] = false;
+    }
+
+    free(p->page_table);
+    p->page_table = NULL;
+
+    p->active = false;
+
+    printf("Released process %s\n", pid);
 }
 
 static void translate_address(const char *pid, int logical_address) {
-    /*
-     * TODO:
-     * 1. Find process.
-     * 2. Check invalid process.
-     * 3. Check invalid logical address.
-     * 4. Compute page number and offset.
-     * 5. Use page table to find frame.
-     * 6. Compute physical address.
-     * 7. Print required message.
-     */
-}
+    Process *p = find_process(pid);
 
+    if (p == NULL) {
+        printf("Error: process not found\n");
+        return;
+    }
+
+    if (logical_address < 0 || logical_address >= p->size) {
+        printf("Error: invalid logical address\n");
+        return;
+    }
+
+    int page_num = logical_address / page_size;
+    int offset = logical_address % page_size;
+
+    int frame = p->page_table[page_num].frame;
+
+    int physical_address = (frame * page_size) + offset;
+
+    printf("Logical address %d -> Physical address %d\n", logical_address, physical_address);
+}
 static int compare_processes_by_creation_order(const void *a, const void *b) {
     const Process *pa = *(const Process * const *)a;
     const Process *pb = *(const Process * const *)b;
@@ -127,13 +172,41 @@ static int compare_processes_by_creation_order(const void *a, const void *b) {
 }
 
 static void print_status(void) {
-    /*
-     * TODO:
-     * 1. Collect active processes.
-     * 2. Sort by creation order.
-     * 3. Print each process and its page table.
-     * 4. Print free frames in increasing order.
-     */
+    const Process *active_procs[MAX_PROCESSES];
+    int count = 0;
+
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].active) {
+            active_procs[count++] = &processes[i];
+        }
+    }
+
+    qsort(active_procs, count, sizeof(Process *), compare_processes_by_creation_order);
+
+    for (int i = 0; i < count; i++) {
+        const Process *p = active_procs[i];
+        printf("Process %s\n", p->pid);
+        printf("  Size: %d bytes\n", p->size);
+        printf("  Pages: %d\n", p->pages);
+        printf("  Internal fragmentation: %d bytes\n", p->fragmentation);
+        printf("  Page Table:\n");
+        for (int j = 0; j < p->pages; j++) {
+            printf("    Page %d -> Frame %d\n", j, p->page_table[j].frame);
+        }
+    }
+
+    printf("Free Frames:\n");
+    if (count_free_frames() == 0) {
+        printf("  none\n");
+    } else {
+        printf(" ");
+        for (int i = 0; i < frame_count; i++) {
+            if (!frame_used[i]) {
+                printf(" %d", i);
+            }
+        }
+        printf("\n");
+    }
 }
 
 static void cleanup(void) {
